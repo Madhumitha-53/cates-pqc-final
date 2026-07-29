@@ -1,0 +1,5 @@
+Method,Packet Delivery Ratio,Total Energy Consumed,Avg Energy / Round,Avg Auth Latency (ms),Network Lifetime (rounds),Attack Detection Rate,False Positive Rate,False Negative Rate,Lightweight Auth Count,PQC Auth Count
+No Security,0.5440000000000002,523.35,5.2335,0.0,100,0.0,0.0,1.0,0,0
+Always PQC,0.23724269766181533,7560.650000000003,75.60650000000004,734.0,40,0.0,0.0,1.0,0,1468
+Traditional Trust-Based,0.7063325409111013,4629.749999999996,46.297499999999964,280.8,100,0.4095,0.0,0.5905,2736,288
+CATES-PQC (Proposed),0.8353141858141859,2422.4999999999995,24.224999999999994,129.85,100,1.0,0.13075,0.0,1507,109
