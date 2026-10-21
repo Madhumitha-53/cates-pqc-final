@@ -1,0 +1,319 @@
+{
+  "simulation": {
+    "NUM_NODES": 100,
+    "NUM_ROUNDS": 100,
+    "MALICIOUS_RATIO": 0.2,
+    "radius": 0.18,
+    "initial_energy_range": [
+      50.0,
+      100.0
+    ],
+    "sender_fraction": 0.2,
+    "BASE_COMM_ENERGY": 0.15,
+    "lambda": 0.7,
+    "omega_formula_constants": {
+      "pfr_weight": 0.4,
+      "ci_weight": 0.4,
+      "paid_weight": 0.2,
+      "anomaly_threshold": 0.35,
+      "scale": 0.15
+    },
+    "weight_base_constants": {
+      "alpha_base": 0.25,
+      "alpha_scale": 0.5,
+      "beta_base": 0.25,
+      "beta_scale": 0.5,
+      "gamma_base": 0.25,
+      "gamma_scale": 0.5,
+      "delta_base": 0.25,
+      "delta_scale": 0.25
+    },
+    "threshold_multipliers": {
+      "upper": [
+        2.0,
+        1.0
+      ],
+      "lower": [
+        1.0,
+        2.0
+      ]
+    },
+    "mad_floor": 0.001,
+    "abs_floor": 0.6,
+    "distribution_shift": {
+      "round": 50,
+      "congestion_increase": 0.2,
+      "honest_pfr_decrease": 0.12,
+      "honest_paid_increase": 0.05,
+      "honest_drop_probability_increase": 0.12
+    },
+    "fixed_threshold_cutoffs": {
+      "excellent": 0.8,
+      "trusted": 0.65,
+      "suspicious": 0.5,
+      "compromised": 0.35
+    },
+    "authentication_costs": {
+      "lightweight_latency_ms": 5.0,
+      "lightweight_energy": 1.0,
+      "pqc_latency_ms": 50.0,
+      "pqc_energy": 5.0,
+      "fixed_trust_threshold": 0.5
+    },
+    "session_lengths": {
+      "Excellent": 8,
+      "Trusted": 4,
+      "Suspicious": 1,
+      "Compromised": 0
+    },
+    "attack_mode": "constant",
+    "p_good": 0.5,
+    "drop_probabilities": {
+      "normal": 0.02,
+      "malicious_range": [
+        0.5,
+        0.9
+      ]
+    },
+    "behavioral_feature_ranges": {
+      "normal_pfr": [
+        0.8,
+        1.0
+      ],
+      "normal_paid": [
+        0.0,
+        0.15
+      ],
+      "malicious_paid": [
+        0.4,
+        1.0
+      ],
+      "malicious_ci": [
+        0.0,
+        0.5
+      ],
+      "malicious_neighbour_degradation": [
+        0.2,
+        0.5
+      ],
+      "normal_neighbour_noise_std": 0.05,
+      "congestion_noise_std": 0.03
+    },
+    "threat_ema_alpha": 0.3,
+    "experiment_settings": {
+      "seeds": [
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61
+      ],
+      "malicious_ratios": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
+      "attack_modes": [
+        "constant",
+        "on_off"
+      ],
+      "lifetime_rounds": 400,
+      "pqc_cost_multipliers": [
+        3,
+        5,
+        10,
+        20
+      ],
+      "lambda_values": [
+        0.5,
+        0.7,
+        0.9
+      ],
+      "threshold_k_values": [
+        1.0,
+        1.5,
+        2.0
+      ],
+      "mad_floors": [
+        0.01,
+        0.03,
+        0.05,
+        0.1
+      ],
+      "abs_floors": [
+        null,
+        0.6
+      ],
+      "shift_round": 50,
+      "bootstrap_resamples": 10000
+    }
+  },
+  "methods": {
+    "none": {
+      "label": "No Security",
+      "auth_mode": "none",
+      "trust_aware_routing": false,
+      "respect_quarantine": false,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "always_pqc": {
+      "label": "Always PQC",
+      "auth_mode": "always_pqc",
+      "trust_aware_routing": false,
+      "respect_quarantine": false,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "trust_fixed": {
+      "label": "Traditional Trust-Based",
+      "auth_mode": "trust_fixed",
+      "trust_aware_routing": false,
+      "respect_quarantine": false,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "cates_pqc": {
+      "label": "CATES-PQC (Proposed)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": true,
+      "respect_quarantine": true,
+      "use_dynamic_weights": true,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      },
+      "mad_floor": 0.001,
+      "abs_floor": null
+    },
+    "cates_pqc_guarded": {
+      "label": "CATES-PQC (Guarded MAD)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": true,
+      "respect_quarantine": true,
+      "use_dynamic_weights": true,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      },
+      "mad_floor": 0.05,
+      "abs_floor": 0.6
+    },
+    "cates_no_routing": {
+      "label": "CATES (No Routing/Quarantine)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": false,
+      "respect_quarantine": false,
+      "use_dynamic_weights": true,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "cates_no_cache": {
+      "label": "CATES (No Cache)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": true,
+      "respect_quarantine": true,
+      "use_dynamic_weights": true,
+      "session_lengths": {
+        "Excellent": 0,
+        "Trusted": 0,
+        "Suspicious": 0,
+        "Compromised": 0
+      }
+    },
+    "trust_fixed_cached": {
+      "label": "Fixed Trust + Cache",
+      "auth_mode": "trust_fixed_cached",
+      "trust_aware_routing": false,
+      "respect_quarantine": false,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "trust_fixed_routing": {
+      "label": "Fixed Trust + Routing",
+      "auth_mode": "trust_fixed_routing",
+      "trust_aware_routing": true,
+      "respect_quarantine": false,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      }
+    },
+    "cates_fixed_weights": {
+      "label": "CATES (Fixed Weights)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": true,
+      "respect_quarantine": true,
+      "use_dynamic_weights": false,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      },
+      "classifier": "adaptive"
+    },
+    "cates_fixed_threshold": {
+      "label": "CATES (Fixed Thresholds)",
+      "auth_mode": "cates_pqc",
+      "trust_aware_routing": true,
+      "respect_quarantine": true,
+      "use_dynamic_weights": true,
+      "session_lengths": {
+        "Excellent": 8,
+        "Trusted": 4,
+        "Suspicious": 1,
+        "Compromised": 0
+      },
+      "classifier": "fixed"
+    }
+  }
+}

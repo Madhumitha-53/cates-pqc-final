@@ -25,12 +25,25 @@ class IoTNode:
     """Represents a single IoT device in the network."""
 
     def __init__(self, node_id, node_type="normal", is_malicious=False,
-                 energy=None, initial_trust=0.5, rng=None):
+                 energy=None, initial_trust=0.5, rng=None,
+                 attack_mode="constant", p_good=0.5, normal_drop_probability=0.02,
+                 behavior_config=None):
         self.rng = rng if rng is not None else np.random.default_rng()
 
         self.node_id = node_id
         self.node_type = node_type              # "normal" or "malicious"
         self.is_malicious = is_malicious
+        self.attack_mode = attack_mode
+        self.p_good = p_good
+        self.normal_drop_probability = normal_drop_probability
+        self.drop_probability = normal_drop_probability
+        self.behavior_config = behavior_config or {
+            "normal_pfr": [0.8, 1.0], "normal_paid": [0.0, 0.15],
+            "malicious_paid": [0.4, 1.0], "malicious_ci": [0.0, 0.5],
+            "malicious_neighbour_degradation": [0.2, 0.5],
+            "normal_neighbour_noise_std": 0.05, "congestion_noise_std": 0.03,
+            "malicious_drop_range": [0.5, 0.9],
+        }
 
         # Energy in [50, 100] units unless explicitly supplied
         self.energy = energy if energy is not None else self.rng.uniform(50, 100)
@@ -82,27 +95,49 @@ class IoTNode:
         delay/jitter, poor crypto integrity, abnormal patterns).
         Normal nodes produce values with small random noise.
         """
-        if self.is_malicious:
-            pfr = self.rng.uniform(0.1, 0.5)
-            paid = self.rng.uniform(0.4, 1.0)      # high deviation
-            ci = self.rng.uniform(0.0, 0.5)
+        attacking = self.is_malicious and (
+            self.attack_mode == "constant" or self.rng.random() >= self.p_good
+        )
+        if attacking:
+            drop_min, drop_max = self.behavior_config["malicious_drop_range"]
+            pfr = self.rng.uniform(1.0 - drop_max, 1.0 - drop_min)
+            paid = self.rng.uniform(*self.behavior_config["malicious_paid"])
+            ci = self.rng.uniform(*self.behavior_config["malicious_ci"])
         else:
-            pfr = self.rng.uniform(0.8, 1.0)
-            paid = self.rng.uniform(0.0, 0.15)     # low deviation
+            pfr = self.rng.uniform(*self.behavior_config["normal_pfr"])
+            paid = self.rng.uniform(*self.behavior_config["normal_paid"])
             ci = 1.0
 
         # Residual energy normalized to [0, 1]
         re = max(self.energy, 0.0) / self.max_energy
 
         # Congestion is a shared/contextual value with small per-node noise
-        cl = float(np.clip(congestion_level + self.rng.normal(0, 0.03), 0, 1))
+        cl = max(0.0, min(
+            1.0,
+            congestion_level + self.rng.normal(
+                0, self.behavior_config["congestion_noise_std"]
+            ),
+        ))
 
         # Neighbour consensus: malicious nodes tend to disagree with neighbours
-        if self.is_malicious:
-            nc = float(np.clip(neighbour_consensus - self.rng.uniform(0.2, 0.5), 0, 1))
+        if attacking:
+            nc = max(0.0, min(
+                1.0,
+                neighbour_consensus - self.rng.uniform(
+                    *self.behavior_config["malicious_neighbour_degradation"]
+                ),
+            ))
         else:
-            nc = float(np.clip(neighbour_consensus + self.rng.normal(0, 0.05), 0, 1))
+            nc = max(0.0, min(
+                1.0,
+                neighbour_consensus + self.rng.normal(
+                    0, self.behavior_config["normal_neighbour_noise_std"]
+                ),
+            ))
 
+        self.drop_probability = (
+            1.0 - pfr if attacking else self.normal_drop_probability
+        )
         self.features = {
             "pfr": pfr, "paid": paid, "ci": ci,
             "re": re, "cl": cl, "nc": nc,

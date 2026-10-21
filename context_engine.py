@@ -17,14 +17,16 @@ import numpy as np
 
 
 class ContextEngine:
-    def __init__(self, network):
+    def __init__(self, network, threat_ema_alpha=0.3):
         self.network = network
+        self.threat_ema_alpha = threat_ema_alpha
+        self.smoothed_threat_level = 0.0
         self.history = []
 
-    def update(self, round_num, traffic_ratio, recent_detection_rate):
+    def update(self, round_num, traffic_ratio, neighbour_trusts=None):
         nodes = self.network.nodes
 
-        alive_ids = self.network.alive_nodes()
+        alive_ids = [nid for nid, node in nodes.items() if node.alive]
         if alive_ids:
             energy_availability = float(np.mean(
                 [nodes[n].energy / nodes[n].max_energy for n in alive_ids]
@@ -34,12 +36,23 @@ class ContextEngine:
 
         congestion = self.network.network_congestion(traffic_ratio)
 
-        # Threat level = smoothed recent detection / suspicious rate
-        threat_level = float(np.clip(recent_detection_rate, 0.0, 1.0))
+        # Estimate threat only from observable classifications, never evaluation labels.
+        flagged_count = sum(
+            nodes[nid].security_class in ("Compromised", "Quarantined")
+            for nid in alive_ids
+        )
+        observed_threat = flagged_count / len(alive_ids) if alive_ids else 0.0
+        self.smoothed_threat_level = (
+            self.threat_ema_alpha * observed_threat
+            + (1.0 - self.threat_ema_alpha) * self.smoothed_threat_level
+        )
+        threat_level = float(np.clip(self.smoothed_threat_level, 0.0, 1.0))
 
         if alive_ids:
+            if neighbour_trusts is None:
+                neighbour_trusts = self.network.neighbour_trust_means()
             neighbour_behaviour = float(np.mean(
-                [self.network.average_neighbour_trust(n) for n in alive_ids]
+                [neighbour_trusts[n] for n in alive_ids]
             ))
         else:
             neighbour_behaviour = 0.5

@@ -1,191 +1,342 @@
-"""
-main.py
---------
-CATES-PQC: Context-Aware Trust Evolution with Self-Adaptive Security for
-Post-Quantum IoT Networks -- full research simulation.
+"""Core CATES-PQC simulation and centralized, reproducible configuration."""
 
-Runs 100 rounds for each of the four compared approaches:
-    1. No Security
-    2. Always PQC Authentication
-    3. Traditional Trust-Based Authentication (fixed threshold)
-    4. Proposed CATES-PQC (context-aware dynamic weights + median/MAD
-       adaptive thresholds + self-adaptive security + trust-aware routing)
-
-Each round is driven as a SimPy timed event so the simulation follows an
-event-based execution model as required by the framework, while remaining
-lightweight enough to run on a normal laptop.
-
-Outputs (written to results/):
-    figure1_trust_evolution.png
-    figure2_pdr_comparison.png
-    figure3_energy_comparison.png
-    figure4_latency_comparison.png
-    figure5_detection_comparison.png
-    figure6_lifetime_comparison.png
-    figure6b_alive_fraction_over_time.png
-    per_round_metrics.csv
-    comparison_summary.csv
-    comparison_table.txt
-"""
-
+import json
 import os
+
 import numpy as np
 import pandas as pd
 import simpy
 
-from network import IoTNetwork
+from authentication import (
+    FIXED_TRUST_THRESHOLD,
+    LIGHTWEIGHT_ENERGY,
+    LIGHTWEIGHT_LATENCY_MS,
+    PQC_ENERGY,
+    PQC_LATENCY_MS,
+    SESSION_LENGTH,
+    SelfAdaptiveSecurityEngine,
+)
 from context_engine import ContextEngine
-from trust_engine import DynamicWeightEngine, TrustEvolutionEngine, AdaptiveThresholdEngine
-from authentication import SelfAdaptiveSecurityEngine, FIXED_TRUST_THRESHOLD
+from metrics import MetricsCollector, confusion_metrics
+from network import IoTNetwork
 from routing import TrustAwareRouter
-from metrics import MetricsCollector, confusion_metrics, build_comparison_table
-import visualization as viz
+from trust_engine import (
+    AdaptiveThresholdEngine,
+    DynamicWeightEngine,
+    FixedThresholdEngine,
+    TrustEvolutionEngine,
+)
 
-# ----------------------------------------------------------------------
-# Global simulation configuration
-# ----------------------------------------------------------------------
-NUM_NODES = 100
-NUM_ROUNDS = 100
-MALICIOUS_RATIO = 0.2
-BASE_COMM_ENERGY = 0.15   # small per-round radio energy cost, independent of auth
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
 
-METHOD_CONFIG = {
-    "none": {
-        "label": "No Security",
-        "trust_aware_routing": False,
-        "respect_quarantine": False,
-        "use_dynamic_weights": False,
+CONFIG = {
+    "NUM_NODES": 100,
+    "NUM_ROUNDS": 100,
+    "MALICIOUS_RATIO": 0.2,
+    "radius": 0.18,
+    "initial_energy_range": [50.0, 100.0],
+    "sender_fraction": 0.20,
+    "BASE_COMM_ENERGY": 0.15,
+    "lambda": 0.7,
+    "omega_formula_constants": {
+        "pfr_weight": 0.4,
+        "ci_weight": 0.4,
+        "paid_weight": 0.2,
+        "anomaly_threshold": 0.35,
+        "scale": 0.15,
     },
-    "always_pqc": {
-        "label": "Always PQC",
-        "trust_aware_routing": False,
-        "respect_quarantine": False,
-        "use_dynamic_weights": False,
+    "weight_base_constants": {
+        "alpha_base": 0.25, "alpha_scale": 0.5,
+        "beta_base": 0.25, "beta_scale": 0.5,
+        "gamma_base": 0.25, "gamma_scale": 0.5,
+        "delta_base": 0.25, "delta_scale": 0.25,
     },
-    "trust_fixed": {
-        "label": "Traditional Trust-Based",
-        "trust_aware_routing": False,
-        "respect_quarantine": False,
-        "use_dynamic_weights": False,
+    "threshold_multipliers": {
+        "upper": [2.0, 1.0],
+        "lower": [1.0, 2.0],
     },
-    "cates_pqc": {
-        "label": "CATES-PQC (Proposed)",
-        "trust_aware_routing": True,
-        "respect_quarantine": True,
-        "use_dynamic_weights": True,
+    "mad_floor": 1e-3,
+    "abs_floor": 0.6,
+    "distribution_shift": {
+        "round": 50,
+        "congestion_increase": 0.2,
+        "honest_pfr_decrease": 0.12,
+        "honest_paid_increase": 0.05,
+        "honest_drop_probability_increase": 0.12,
+    },
+    "fixed_threshold_cutoffs": {
+        "excellent": 0.8,
+        "trusted": 0.65,
+        "suspicious": 0.5,
+        "compromised": 0.35,
+    },
+    "authentication_costs": {
+        "lightweight_latency_ms": LIGHTWEIGHT_LATENCY_MS,
+        "lightweight_energy": LIGHTWEIGHT_ENERGY,
+        "pqc_latency_ms": PQC_LATENCY_MS,
+        "pqc_energy": PQC_ENERGY,
+        "fixed_trust_threshold": FIXED_TRUST_THRESHOLD,
+    },
+    "session_lengths": dict(SESSION_LENGTH),
+    "attack_mode": "constant",
+    "p_good": 0.5,
+    "drop_probabilities": {
+        "normal": 0.02,
+        "malicious_range": [0.5, 0.9],
+    },
+    "behavioral_feature_ranges": {
+        "normal_pfr": [0.8, 1.0],
+        "normal_paid": [0.0, 0.15],
+        "malicious_paid": [0.4, 1.0],
+        "malicious_ci": [0.0, 0.5],
+        "malicious_neighbour_degradation": [0.2, 0.5],
+        "normal_neighbour_noise_std": 0.05,
+        "congestion_noise_std": 0.03,
+    },
+    "threat_ema_alpha": 0.3,
+    "experiment_settings": {
+        "seeds": list(range(42, 62)),
+        "malicious_ratios": [0.0, 0.1, 0.2, 0.3, 0.4],
+        "attack_modes": ["constant", "on_off"],
+        "lifetime_rounds": 400,
+        "pqc_cost_multipliers": [3, 5, 10, 20],
+        "lambda_values": [0.5, 0.7, 0.9],
+        "threshold_k_values": [1.0, 1.5, 2.0],
+        "mad_floors": [0.01, 0.03, 0.05, 0.10],
+        "abs_floors": [None, 0.6],
+        "shift_round": 50,
+        "bootstrap_resamples": 10000,
     },
 }
 
-FIXED_WEIGHTS = {"alpha": 0.25, "beta": 0.25, "gamma": 0.25, "delta": 0.25}
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+METHOD_CONFIG = {
+    "none": {
+        "label": "No Security", "auth_mode": "none",
+        "trust_aware_routing": False, "respect_quarantine": False,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+    },
+    "always_pqc": {
+        "label": "Always PQC", "auth_mode": "always_pqc",
+        "trust_aware_routing": False, "respect_quarantine": False,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+    },
+    "trust_fixed": {
+        "label": "Traditional Trust-Based", "auth_mode": "trust_fixed",
+        "trust_aware_routing": False, "respect_quarantine": False,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+    },
+    "cates_pqc": {
+        "label": "CATES-PQC (Proposed)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": True, "respect_quarantine": True,
+        "use_dynamic_weights": True, "session_lengths": CONFIG["session_lengths"],
+        "mad_floor": 1e-3, "abs_floor": None,
+    },
+    "cates_pqc_guarded": {
+        "label": "CATES-PQC (Guarded MAD)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": True, "respect_quarantine": True,
+        "use_dynamic_weights": True, "session_lengths": CONFIG["session_lengths"],
+        "mad_floor": 0.05, "abs_floor": 0.6,
+    },
+    "cates_no_routing": {
+        "label": "CATES (No Routing/Quarantine)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": False, "respect_quarantine": False,
+        "use_dynamic_weights": True, "session_lengths": CONFIG["session_lengths"],
+    },
+    "cates_no_cache": {
+        "label": "CATES (No Cache)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": True, "respect_quarantine": True,
+        "use_dynamic_weights": True,
+        "session_lengths": {name: 0 for name in CONFIG["session_lengths"]},
+    },
+    "trust_fixed_cached": {
+        "label": "Fixed Trust + Cache", "auth_mode": "trust_fixed_cached",
+        "trust_aware_routing": False, "respect_quarantine": False,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+    },
+    "trust_fixed_routing": {
+        "label": "Fixed Trust + Routing", "auth_mode": "trust_fixed_routing",
+        "trust_aware_routing": True, "respect_quarantine": False,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+    },
+    "cates_fixed_weights": {
+        "label": "CATES (Fixed Weights)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": True, "respect_quarantine": True,
+        "use_dynamic_weights": False, "session_lengths": CONFIG["session_lengths"],
+        "classifier": "adaptive",
+    },
+    "cates_fixed_threshold": {
+        "label": "CATES (Fixed Thresholds)", "auth_mode": "cates_pqc",
+        "trust_aware_routing": True, "respect_quarantine": True,
+        "use_dynamic_weights": True, "session_lengths": CONFIG["session_lengths"],
+        "classifier": "fixed",
+    },
+}
+METHOD_ORDER = list(METHOD_CONFIG)
+FIXED_WEIGHTS = {name: 0.25 for name in ("alpha", "beta", "gamma", "delta")}
 
 
-def run_method(method_key, seed=42, verbose=True):
+def write_config(path=RESULTS_DIR, print_config=True):
+    os.makedirs(path, exist_ok=True)
+    saved = {"simulation": CONFIG, "methods": METHOD_CONFIG}
+    with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as stream:
+        json.dump(saved, stream, indent=2)
+        stream.write("\n")
+    if print_config:
+        print("Simulation configuration:")
+        print(json.dumps(saved, indent=2))
+
+
+def run_method(method_key, seed=42, verbose=True, num_rounds=None,
+               malicious_ratio=None, attack_mode=None, overrides=None):
+    """Run one method with the supplied common seed and scenario parameters."""
     cfg = METHOD_CONFIG[method_key]
     label = cfg["label"]
-
+    rounds = CONFIG["NUM_ROUNDS"] if num_rounds is None else num_rounds
+    ratio = CONFIG["MALICIOUS_RATIO"] if malicious_ratio is None else malicious_ratio
+    mode = CONFIG["attack_mode"] if attack_mode is None else attack_mode
+    overrides = overrides or {}
+    scenario = overrides.get("scenario")
+    lam = overrides.get("lambda", CONFIG["lambda"])
+    auth_costs = {
+        **CONFIG["authentication_costs"],
+        **overrides.get("authentication_costs", {}),
+    }
+    threshold_multipliers = overrides.get(
+        "threshold_multipliers", CONFIG["threshold_multipliers"]
+    )
+    mad_floor = overrides.get("mad_floor", cfg.get("mad_floor", CONFIG["mad_floor"]))
+    abs_floor = overrides.get("abs_floor", cfg.get("abs_floor"))
     rng = np.random.default_rng(seed)
-    network = IoTNetwork(num_nodes=NUM_NODES, malicious_ratio=MALICIOUS_RATIO, seed=seed)
-
-    context_engine = ContextEngine(network)
-    weight_engine = DynamicWeightEngine()
-    trust_engine = TrustEvolutionEngine(lam=0.7)
-    threshold_engine = AdaptiveThresholdEngine()
-    security_engine = SelfAdaptiveSecurityEngine(method=method_key)
+    network = IoTNetwork(
+        num_nodes=CONFIG["NUM_NODES"],
+        malicious_ratio=ratio,
+        connect_radius=CONFIG["radius"],
+        seed=seed,
+        initial_energy_range=tuple(CONFIG["initial_energy_range"]),
+        attack_mode=mode,
+        p_good=CONFIG["p_good"],
+        normal_drop_probability=CONFIG["drop_probabilities"]["normal"],
+        behavior_config={
+            **CONFIG["behavioral_feature_ranges"],
+            "malicious_drop_range": CONFIG["drop_probabilities"]["malicious_range"],
+        },
+    )
+    context_engine = ContextEngine(network, CONFIG["threat_ema_alpha"])
+    weight_engine = DynamicWeightEngine(CONFIG["weight_base_constants"])
+    trust_engine = TrustEvolutionEngine(
+        lam, CONFIG["omega_formula_constants"]
+    )
+    if cfg.get("classifier") == "fixed":
+        threshold_engine = FixedThresholdEngine(CONFIG["fixed_threshold_cutoffs"])
+    else:
+        threshold_engine = AdaptiveThresholdEngine(
+            tuple(threshold_multipliers["upper"]),
+            tuple(threshold_multipliers["lower"]),
+            mad_floor=mad_floor,
+            abs_floor=abs_floor,
+        )
+    security_engine = SelfAdaptiveSecurityEngine(
+        method=cfg["auth_mode"],
+        session_lengths=cfg["session_lengths"],
+        respect_quarantine=cfg["respect_quarantine"],
+        fixed_threshold=auth_costs["fixed_trust_threshold"],
+        lightweight_latency_ms=auth_costs["lightweight_latency_ms"],
+        lightweight_energy=auth_costs["lightweight_energy"],
+        pqc_latency_ms=auth_costs["pqc_latency_ms"],
+        pqc_energy=auth_costs["pqc_energy"],
+    )
     router = TrustAwareRouter(network)
-
     collector = MetricsCollector(label)
-
-    # Track a representative normal and malicious node for Figure 1
-    normal_id = network.normal_ids()[0]
-    malicious_id = network.malicious_ids()[0]
-    trust_hist_normal, trust_hist_malicious = [], []
-
-    recent_detection_rate = 0.0
-
     env = simpy.Environment()
 
-    def simulation_process(env):
-        nonlocal recent_detection_rate
-        for round_num in range(1, NUM_ROUNDS + 1):
-            yield env.timeout(1)  # advance the event clock by one round
+    def record_trust_means(physical_alive_ids):
+        collector.record_trust_means(network.nodes, physical_alive_ids)
 
-            alive_ids = network.alive_nodes() if cfg["respect_quarantine"] else \
-                [nid for nid, n in network.nodes.items() if n.alive]
+    def simulation_process():
+        for round_num in range(1, rounds + 1):
+            yield env.timeout(1)
+            physical_alive_ids = [
+                nid for nid, node in network.nodes.items() if node.alive
+            ]
+            active_ids = network.alive_nodes() if cfg["respect_quarantine"] \
+                else physical_alive_ids
 
-            if len(alive_ids) < 2:
-                # network exhausted -- record a flat continuation and stop early
-                collector.record_round(round_num, 0, 0, 0.0, 0.0, 0, 0,
-                                        recent_detection_rate, 0.0, 1.0,
-                                        network.alive_fraction())
-                trust_hist_normal.append(network.nodes[normal_id].trust_score)
-                trust_hist_malicious.append(network.nodes[malicious_id].trust_score)
-                continue
-
-            # ---------------- 1. Generate communication ----------------
-            # Only a fraction of nodes actively communicate each round --
-            # authentication and radio energy cost apply only to these
-            # participants, not to every idle alive node.
-            num_pairs = max(1, int(len(alive_ids) * 0.20))
-            senders = rng.choice(alive_ids, size=min(num_pairs, len(alive_ids)), replace=False)
-            traffic_ratio = num_pairs / NUM_NODES
-
+            num_pairs = (
+                max(1, int(len(active_ids) * CONFIG["sender_fraction"]))
+                if len(active_ids) >= 2 else 0
+            )
+            senders = rng.choice(
+                active_ids, size=min(num_pairs, len(active_ids)), replace=False
+            ) if num_pairs else []
+            traffic_ratio = num_pairs / CONFIG["NUM_NODES"]
+            feature_traffic_ratio = traffic_ratio
+            if (scenario == "shift"
+                    and round_num >= CONFIG["distribution_shift"]["round"]):
+                feature_traffic_ratio = min(
+                    1.0, traffic_ratio
+                    + CONFIG["distribution_shift"]["congestion_increase"]
+                )
             pending_pairs = []
             for src in senders:
-                candidates = [n for n in alive_ids if n != src]
-                if not candidates:
-                    continue
-                dst = candidates[rng.integers(0, len(candidates))]
-                pending_pairs.append((src, dst))
-            participants = set()
-            for src, dst in pending_pairs:
-                participants.add(src)
-                participants.add(dst)
+                candidates = [nid for nid in active_ids if nid != src]
+                if candidates:
+                    dst = candidates[rng.integers(0, len(candidates))]
+                    pending_pairs.append((int(src), int(dst)))
+            participants = {nid for pair in pending_pairs for nid in pair}
 
-
-            # ---------------- 2. Node behaviour feature extraction ------
-            avg_consensus_estimate = 1.0 - (MALICIOUS_RATIO * 0.8)
-            for nid in alive_ids:
+            # Trust state continues to evolve for physically alive quarantined nodes.
+            neighbour_trusts = network.neighbour_trust_means()
+            for nid in physical_alive_ids:
                 node = network.nodes[nid]
-                neighbour_consensus = network.average_neighbour_trust(nid)
-                node.generate_features(traffic_ratio, neighbour_consensus)
-
-            # ---------------- 3. Update context --------------------------
-            context = context_engine.update(round_num, traffic_ratio, recent_detection_rate)
-
-            # ---------------- 4. Compute weights --------------------------
-            weights = weight_engine.compute_weights(context) if cfg["use_dynamic_weights"] \
-                else FIXED_WEIGHTS
-
-            # ---------------- 5. Update trust ------------------------------
-            for nid in alive_ids:
+                node.generate_features(
+                    feature_traffic_ratio, neighbour_trusts[nid]
+                )
+                if (scenario == "shift"
+                        and round_num >= CONFIG["distribution_shift"]["round"]):
+                    shift = CONFIG["distribution_shift"]
+                    if not node.is_malicious:
+                        node.features["pfr"] = max(
+                            0.0, node.features["pfr"] - shift["honest_pfr_decrease"]
+                        )
+                        node.features["paid"] = min(
+                            1.0, node.features["paid"] + shift["honest_paid_increase"]
+                        )
+                        node.drop_probability = min(
+                            1.0, node.normal_drop_probability
+                            + shift["honest_drop_probability_increase"]
+                        )
+            context = context_engine.update(
+                round_num, feature_traffic_ratio, neighbour_trusts
+            )
+            # This ablation disables trust-aware routing and quarantine, which
+            # also changes active traffic and radio/auth energy. Its later
+            # detection rates therefore are not a classification-only comparison.
+            weights = weight_engine.compute_weights(context) \
+                if cfg["use_dynamic_weights"] else FIXED_WEIGHTS
+            for nid in physical_alive_ids:
                 trust_engine.update_trust(network.nodes[nid], weights)
 
-            # ---------------- 6. Classify nodes (median/MAD) ---------------
             classification = threshold_engine.classify_all(network)
             labels = classification.get("labels", {})
-
-            # Detection set depends on the method's own detection mechanism
-            if method_key == "cates_pqc":
-                # "Confirmed threat" tier: nodes the security engine actually
-                # escalates to PQC or removes from routing. The broader
-                # "Suspicious" band is monitored more closely but is not, by
-                # itself, an accusation of malicious behaviour.
-                flagged = [nid for nid, lab in labels.items()
-                           if lab in ("Compromised", "Quarantined")]
-            elif method_key == "trust_fixed":
-                flagged = [nid for nid in alive_ids
-                           if network.nodes[nid].trust_score < FIXED_TRUST_THRESHOLD]
+            collector.record_thresholds(
+                classification.get("median", float("nan")),
+                classification.get("mad", float("nan")),
+            )
+            if cfg["auth_mode"] == "cates_pqc":
+                flagged = [
+                    nid for nid, node_label in labels.items()
+                    if node_label in ("Compromised", "Quarantined")
+                ]
+            elif cfg["auth_mode"].startswith("trust_fixed"):
+                flagged = [
+                    nid for nid in physical_alive_ids
+                    if network.nodes[nid].trust_score < auth_costs["fixed_trust_threshold"]
+                ]
             else:
-                flagged = []  # no discrimination mechanism
-
+                flagged = []
             detection_rate, fpr, fnr = confusion_metrics(network, flagged)
-            recent_detection_rate = detection_rate
+            collector.record_detection(round_num, network, flagged)
 
-            # ---------------- 7. Perform authentication --------------------
-            # Only nodes actually communicating this round pay the
-            # authentication cost (session establishment), not every idle
-            # alive node in the network.
             round_latency = 0.0
             round_energy = 0.0
             lightweight_count = 0
@@ -194,31 +345,30 @@ def run_method(method_key, seed=42, verbose=True):
                 node = network.nodes[nid]
                 if not node.alive:
                     continue
-                node.consume_energy(BASE_COMM_ENERGY)
-                round_energy += BASE_COMM_ENERGY
+                node.consume_energy(CONFIG["BASE_COMM_ENERGY"])
+                round_energy += CONFIG["BASE_COMM_ENERGY"]
                 if not node.alive:
                     continue
-                label = labels.get(nid)
-                result = security_engine.authenticate(node, classification_label=label,
-                                                       round_num=round_num)
+                result = security_engine.authenticate(
+                    node, labels.get(nid), round_num
+                )
                 if result is not None:
                     round_latency += result["latency_ms"]
                     round_energy += result["energy"]
-                    if result["mechanism"] == "lightweight":
-                        lightweight_count += 1
-                    elif result["mechanism"] == "pqc":
-                        pqc_count += 1
+                    lightweight_count += result["mechanism"] == "lightweight"
+                    pqc_count += result["mechanism"] == "pqc"
 
-            # ---------------- 8. Route packets ------------------------------
-            sent, delivered = 0, 0
-            still_alive = network.alive_nodes() if cfg["respect_quarantine"] else \
-                [nid for nid, n in network.nodes.items() if n.alive]
-
+            sent, delivered, delivered_hops = 0, 0, 0
+            routable_ids = network.alive_nodes() if cfg["respect_quarantine"] \
+                else [nid for nid, node in network.nodes.items() if node.alive]
+            router.prepare_round(
+                trust_aware=cfg["trust_aware_routing"],
+                respect_quarantine=cfg["respect_quarantine"],
+            )
             for src, dst in pending_pairs:
-                if src not in still_alive or dst not in still_alive:
+                if src not in routable_ids or dst not in routable_ids:
                     continue
                 sent += 1
-
                 found, path = router.find_path(
                     src, dst,
                     trust_aware=cfg["trust_aware_routing"],
@@ -226,109 +376,34 @@ def run_method(method_key, seed=42, verbose=True):
                 )
                 if not found:
                     continue
-
-                # simulate hop-by-hop packet delivery: only malicious
-                # intermediate nodes meaningfully drop packets (packet
-                # dropping / reduced forwarding attack behaviour). Normal
-                # nodes forward reliably (small residual loss only).
-                success = True
-                for hop in path[1:-1]:
-                    hop_node = network.nodes[hop]
-                    if hop_node.is_malicious:
-                        drop_prob = 1.0 - hop_node.features.get("pfr", 1.0)
-                    else:
-                        drop_prob = 0.02  # small baseline link loss
-                    if rng.random() < drop_prob:
-                        success = False
-                        break
+                success = all(
+                    rng.random() >= network.nodes[hop].drop_probability
+                    for hop in path[1:-1]
+                )
                 if success:
                     delivered += 1
+                    delivered_hops += len(path) - 1
 
-
-            # ---------------- 9. Collect metrics -----------------------------
             collector.record_round(
                 round_num, sent, delivered, round_energy, round_latency,
                 lightweight_count, pqc_count, detection_rate, fpr, fnr,
-                network.alive_fraction(),
+                network.alive_fraction(), delivered_hops=delivered_hops,
+                network=network, scenario=scenario,
+                shift_round=CONFIG["distribution_shift"]["round"],
             )
-            trust_hist_normal.append(network.nodes[normal_id].trust_score)
-            trust_hist_malicious.append(network.nodes[malicious_id].trust_score)
+            record_trust_means(set(physical_alive_ids))
 
-    env.process(simulation_process(env))
-    env.run(until=NUM_ROUNDS + 1)
-
+    env.process(simulation_process())
+    env.run(until=rounds + 1)
     if verbose:
-        print(f"  [done] {label}: {NUM_ROUNDS} rounds simulated.")
-
-    return collector, trust_hist_normal, trust_hist_malicious
+        print(f"  [done] {label}: {rounds} rounds, seed={seed}, "
+              f"ratio={ratio:.0%}, attack={mode}.")
+    return collector, collector.trust_history_normal, collector.trust_history_malicious
 
 
 def main():
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    print("=" * 70)
-    print("CATES-PQC Research Simulation")
-    print("Context-Aware Trust Evolution with Self-Adaptive Security")
-    print("for Post-Quantum IoT Networks")
-    print("=" * 70)
-    print(f"Nodes: {NUM_NODES} | Rounds: {NUM_ROUNDS} | Malicious ratio: {MALICIOUS_RATIO:.0%}\n")
-
-    method_order = ["none", "always_pqc", "trust_fixed", "cates_pqc"]
-    summaries = []
-    method_dfs = {}
-    all_round_dfs = []
-    cates_trust_normal, cates_trust_malicious = None, None
-
-    print("Running simulations for all four methods...")
-    for key in method_order:
-        collector, t_norm, t_mal = run_method(key, seed=42, verbose=True)
-        summary = collector.summary()
-        summaries.append(summary)
-        df = collector.to_dataframe()
-        method_dfs[METHOD_CONFIG[key]["label"]] = df
-        all_round_dfs.append(df)
-        if key == "cates_pqc":
-            cates_trust_normal, cates_trust_malicious = t_norm, t_mal
-
-    # ---------------- Save per-round CSV -----------------------------------
-    combined_df = pd.concat(all_round_dfs, ignore_index=True)
-    combined_csv_path = os.path.join(RESULTS_DIR, "per_round_metrics.csv")
-    combined_df.to_csv(combined_csv_path, index=False)
-
-    # ---------------- Build + save comparison table -------------------------
-    summary_df = build_comparison_table(summaries)
-    summary_csv_path = os.path.join(RESULTS_DIR, "comparison_summary.csv")
-    summary_df.to_csv(summary_csv_path, index=False)
-
-    table_txt_path = os.path.join(RESULTS_DIR, "comparison_table.txt")
-    with open(table_txt_path, "w") as f:
-        f.write(summary_df.to_string(index=False))
-
-    print("\n" + "=" * 70)
-    print("PERFORMANCE COMPARISON TABLE")
-    print("=" * 70)
-    pd.set_option("display.width", 160)
-    pd.set_option("display.max_columns", 20)
-    print(summary_df.to_string(index=False))
-
-    # ---------------- Generate all figures -----------------------------------
-    print("\nGenerating publication-quality figures (300 DPI PNG)...")
-    viz.generate_all_figures(
-        cates_trust_normal, cates_trust_malicious,
-        summary_df, method_dfs, RESULTS_DIR,
-    )
-
-    print(f"\nAll results saved to: {RESULTS_DIR}")
-    print("  - per_round_metrics.csv")
-    print("  - comparison_summary.csv")
-    print("  - comparison_table.txt")
-    print("  - figure1_trust_evolution.png")
-    print("  - figure2_pdr_comparison.png")
-    print("  - figure3_energy_comparison.png")
-    print("  - figure4_latency_comparison.png")
-    print("  - figure5_detection_comparison.png")
-    print("  - figure6_lifetime_comparison.png")
-    print("  - figure6b_alive_fraction_over_time.png")
-    print("\nSimulation complete.")
+    from experiments import main as run_experiments
+    run_experiments()
 
 
 if __name__ == "__main__":

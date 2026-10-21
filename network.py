@@ -17,10 +17,17 @@ from node import IoTNode
 
 class IoTNetwork:
     def __init__(self, num_nodes=100, malicious_ratio=0.2, connect_radius=0.18,
-                 seed=42):
+                 seed=42, initial_energy_range=(50, 100), attack_mode="constant",
+                 p_good=0.5, normal_drop_probability=0.02,
+                 behavior_config=None):
         self.num_nodes = num_nodes
         self.malicious_ratio = malicious_ratio
         self.seed = seed
+        self.initial_energy_range = initial_energy_range
+        self.attack_mode = attack_mode
+        self.p_good = p_good
+        self.normal_drop_probability = normal_drop_probability
+        self.behavior_config = behavior_config
         self.rng = np.random.default_rng(seed)
 
         self.graph = nx.Graph()
@@ -28,6 +35,12 @@ class IoTNetwork:
         self.positions = {}      # node_id -> (x, y) for a geometric topology
 
         self._build_topology(connect_radius)
+        edges = list(self.graph.edges)
+        self._edge_sources = np.asarray([u for u, _ in edges], dtype=int)
+        self._edge_targets = np.asarray([v for _, v in edges], dtype=int)
+        self._degrees = np.asarray(
+            [self.graph.degree(nid) for nid in range(self.num_nodes)], dtype=float
+        )
         self._populate_nodes()
 
     # ------------------------------------------------------------------
@@ -72,9 +85,13 @@ class IoTNetwork:
                 node_id=nid,
                 node_type="malicious" if is_mal else "normal",
                 is_malicious=is_mal,
-                energy=self.rng.uniform(50, 100),
+                energy=self.rng.uniform(*self.initial_energy_range),
                 initial_trust=0.5,
                 rng=self.rng,
+                attack_mode=self.attack_mode,
+                p_good=self.p_good,
+                normal_drop_probability=self.normal_drop_probability,
+                behavior_config=self.behavior_config,
             )
             self.nodes[nid] = node
 
@@ -97,11 +114,25 @@ class IoTNetwork:
         nbrs = self.neighbours(node_id)
         if not nbrs:
             return 0.5
-        return float(np.mean([self.nodes[n].trust_score for n in nbrs]))
+        return sum(self.nodes[n].trust_score for n in nbrs) / len(nbrs)
+
+    def neighbour_trust_means(self):
+        trust = np.fromiter(
+            (self.nodes[nid].trust_score for nid in range(self.num_nodes)),
+            dtype=float, count=self.num_nodes,
+        )
+        totals = np.bincount(
+            np.concatenate((self._edge_sources, self._edge_targets)),
+            weights=np.concatenate((trust[self._edge_targets], trust[self._edge_sources])),
+            minlength=self.num_nodes,
+        )
+        means = np.full(self.num_nodes, 0.5, dtype=float)
+        np.divide(totals, self._degrees, out=means, where=self._degrees > 0)
+        return means
 
     def network_congestion(self, active_traffic_ratio):
         """Simple network-wide congestion proxy in [0, 1]."""
         return float(np.clip(active_traffic_ratio, 0.0, 1.0))
 
     def alive_fraction(self):
-        return len(self.alive_nodes()) / self.num_nodes
+        return sum(node.alive for node in self.nodes.values()) / self.num_nodes

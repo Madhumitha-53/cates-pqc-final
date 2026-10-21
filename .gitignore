@@ -1,0 +1,6 @@
+@"
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+"@ | Set-Content .gitignore
